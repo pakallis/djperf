@@ -1,10 +1,19 @@
 # coding=utf-8
 """Common middleware"""
 import logging
-
 import time
+from djperf.utils import print_slow_queries
 
-from django.db import connection
+
+def convert_size(size):
+    if size <1024:
+        return size
+    elif (size >= 1024) and (size < (1024 * 1024)):
+        return "%.2f KB"%(size/1024)
+    elif (size >= (1024*1024)) and (size < (1024*1024*1024)):
+        return "%.2f MB"%(size/(1024*1024))
+    else:
+        return "%.2f GB"%(size/(1024*1024*1024))
 
 
 class MiddlewareMixin:
@@ -22,27 +31,20 @@ class MiddlewareMixin:
 
 
 class SQLLog(MiddlewareMixin):
+    logger = logging.getLogger()
+    slow_response_time = 0.001
 
     def process_request(self, request):
         request.start_time = time.time()
 
     def process_response(self, request, response):
         """Process request"""
-        logger = logging.getLogger()
+        from .utils import log
+
         response_time = time.time() - request.start_time
-        if response_time < 0.4:
+        if response_time < self.slow_response_time:
             return response
-        times = []
-        slow_queries = []
-        for q in connection.queries:
-            time_ = float(q['time'])
-            if time_ > 0.1:
-                slow_queries.append(q)
-            times.append(time_)
-        logger.warning(request.path + str(request.GET.urlencode()))
-        logger.warning("Total time: %s", response_time)
-        logger.warning("Queries Total time: %s", sum(times))
-        logger.warning("Queries: %s", len(times))
-        for q in sorted(slow_queries, key=lambda x: x['time']):
-            logger.warning("Slow query: sql: %s time: %s", q['sql'], q['time'])
+        print_slow_queries(str(request.path + str(request.GET.urlencode())))
+        log(f"Response Time: {round(response_time, 3)} (sec)")
         return response
+
