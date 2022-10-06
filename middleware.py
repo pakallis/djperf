@@ -5,17 +5,6 @@ import time
 from djperf.utils import print_slow_queries
 
 
-def convert_size(size):
-    if size <1024:
-        return size
-    elif (size >= 1024) and (size < (1024 * 1024)):
-        return "%.2f KB"%(size/1024)
-    elif (size >= (1024*1024)) and (size < (1024*1024*1024)):
-        return "%.2f MB"%(size/(1024*1024))
-    else:
-        return "%.2f GB"%(size/(1024*1024*1024))
-
-
 class MiddlewareMixin:
     def __init__(self, get_response=None):
         self.get_response = get_response
@@ -42,8 +31,8 @@ class SQLLog(MiddlewareMixin):
         from .utils import log
 
         response_time = time.time() - request.start_time
-        if response_time < self.slow_response_time:
-            return response
+        # if response_time < self.slow_response_time:
+        #     return response
         print_slow_queries(str(request.path + str(request.GET.urlencode())))
         log(f"Response Time: {round(response_time, 3)} (sec)")
         return response

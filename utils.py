@@ -1,9 +1,10 @@
-from collections import Counter
+from collections import Counter, defaultdict
 import cProfile
 from functools import wraps
 import logging
 import pstats
 import re
+import sys
 import time
 
 from django.db import connection, reset_queries
@@ -44,12 +45,10 @@ def nplusone(fn, ignore=None):
     install('nplusone')
     from nplusone.core import profiler
     import nplusone.ext.django
-    if ignore is None:
-        whitelist = []
-    else:
-        whitelist = [
-            {'label': 'unused_eager_load', 'model': '*'}
-        ]
+    whitelist = [
+        {'label': 'unused_eager_load', 'model': '*'}
+    ]
+    if ignore is not None:
         for ig in ignore:
             whitelist += {'label': 'n_plus_one', 'model': ig}
 
@@ -80,6 +79,7 @@ def mprof():
                 result = fn(*args, **kwargs)
                 heap_after = heap.heap()
                 logger.warning("Total Heap Size after: %s", convert_size(heap_after.size))
+                logger.warning("Memory diff: %s", convert_size(heap_after.size - heap_before.size))
                 return result
             return inner
     else:
@@ -95,6 +95,7 @@ def pprof(sort_args=None, print_args=None, times=1):
         sort_args = ['cumulative']
     if print_args is None:
         print_args = [20]
+
     def decorator(fn):
         @wraps(fn)
         def inner(*args, **kwargs):
@@ -114,6 +115,11 @@ def pprof(sort_args=None, print_args=None, times=1):
     return decorator
 
 
+def mlprof():
+    install("memory_profiler")
+    pass
+
+
 def lprof(times=1):
     """
     TODO: Find if decorated with task and get original function.
@@ -121,6 +127,7 @@ def lprof(times=1):
     """
     install('line_profiler')
     from line_profiler import LineProfiler
+
     def decorator(fn):
         profiler = LineProfiler()
         profiler.add_function(fn)
@@ -140,6 +147,11 @@ def lprof(times=1):
 
 
 def slow():
+    """
+    Decorator that provides query stats for the decorated function
+
+    Prints details about query count and total query time per table
+    """
     def decorator(fn):
         def inner(*args, **kwargs):
             reset_queries()
@@ -158,7 +170,8 @@ def print_slow_queries(name):
     times = []
     slow_queries = []
     queries_sql = []
-    for q in connection.queries:
+    queries = list(connection.queries)
+    for q in queries:
         time_ = float(q['time'])
         if time_ > SLOW_QUERY_THRESHOLD:
             slow_queries.append(q)
@@ -167,19 +180,31 @@ def print_slow_queries(name):
 
     logger.warning(name)
 
-    for q in sorted(slow_queries, key=lambda x: x['time']):
-        logger.warning("Slow query: sql: %s time: %s", q['sql'], q['time'])
+    # for q in sorted(slow_queries, key=lambda x: x['time']):
+    #     logger.warning("Slow query: sql: %s time: %s", q['sql'], q['time'])
 
     logger.warning("-" * 100)
 
-    print_slowest_queries(connection.queries)
+    # print_slowest_queries(connection.queries)
     print_counts_per_table(queries_sql)
+    print_total_time_per_table(queries)
     print_times_per_table(connection.queries)
     log(f"{len(times)} Queries - Total time: {round(sum(times), 3)} (sec)")
 
 
+def print_total_time_per_table(queries):
+    from tabulate import tabulate
+    total_times = defaultdict(lambda: 0)
+    for q in queries:
+        table = re.search(r'FROM "(.*?)"', q['sql'])
+        if table is not None:
+            total_times[table.groups()[0]] += float(q['time'])
+        else:
+            total_times['OTHER'] += float(q['time'])
+    log(tabulate(Counter(total_times).most_common(10), headers=['Table', 'Total Time (SEC)']))
+
+
 def print_slowest_queries(queries, top=5):
-    import re
     logger.warning(
         "TOP %s SLOWEST QUERIES: %s", top,
         "\n".join(
@@ -205,7 +230,6 @@ def print_counts_per_table(queries_sql):
 
 
 def log(msg):
-    import sys
     sys.stdout.write('\n')
     sys.stdout.write(msg)
     sys.stdout.write('\n')
@@ -214,9 +238,7 @@ def log(msg):
 
 def print_times_per_table(queries):
     # Print also total times for each query group
-    from collections import defaultdict
     from tabulate import tabulate
-
     times_per_table = defaultdict(lambda: 0)
     for q in queries:
         sql = q['sql']
@@ -232,7 +254,6 @@ def print_times_per_table(queries):
 
 def count_queries(fn):
     """TODO: Count queries on multiple invocations of function"""
-    from django.db import connection, reset_queries
     logger = logging.getLogger()
     def decorated_fn(*args, **kwargs):
         reset_queries()
